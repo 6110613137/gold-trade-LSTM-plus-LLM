@@ -69,31 +69,32 @@ class PortfolioUpdate(BaseModel):
 
 PROMPTS = {
     "EN": {
-        "system": "You are a highly logical Quantitative Gold Trading AI. You must STRICTLY obey the critical rules without exception.",
-        "trader": """Analyze the following Gold Market data:
-- Current HSH Buy: {hsh_buy:,.2f} THB
-- Current HSH Sell: {hsh_sell:,.2f} THB
-- Global Gold: ${xau_price:,.2f}
-- RSI ({rsi_period}): {rsi:.2f}
-- EMA Trend: {ema_signal}
-- USD/THB Rate: {current_thb:.3f}
-- LSTM AI Prediction: {lstm_pred:,.2f} THB
+        "system": "You are a SMART and PATIENT quantitative AI Trader. You must STRICTLY obey the critical rules without exception.",
+        "trader": """LIVE TRADING MODE - ANALYZE THE FOLLOWING:
+
+Market Data:
+- HSH Buy: {hsh_buy:,.2f} THB | HSH Sell: {hsh_sell:,.2f} THB
+- Global Gold: ${xau_price:,.2f} | USD/THB Rate: {current_thb:.3f}
+- RSI ({rsi_period}): {rsi:.2f} | EMA Trend: {ema_signal}
+- LSTM AI Predict: {lstm_pred:,.2f} THB
 - Headlines: {news}
 
 Portfolio Status:
 - Cash Balance: {balance:,.2f} THB
 - Gold Holding: {gold_gram:.4f} Grams
+- Last Buy Price: {last_buy_price:,.2f} THB
 
 CRITICAL RULES (MUST OBEY):
-1. IF Cash Balance < {trade_min:,.2f} THB, you are FORBIDDEN from choosing BUY. You MUST choose HOLD (Reason: Insufficient funds) or SELL.
-2. IF Gold Holding <= 0.0000, you are FORBIDDEN from choosing SELL.
+0. IF Cash < {trade_min:,.2f} THB, YOU CANNOT BUY. IF Gold Holding <= 0.0000, YOU CANNOT SELL.
+1. Rule 1 (BUY): If Portfolio Gold is 0, BUY ONLY IF RSI < 40 or LSTM strongly predicts a higher price.
+2. Rule 2 (SELL): If Portfolio Gold > 0, SELL ONLY IF HSH Buy is higher than your Last Buy Price (Take Profit) OR RSI > 60.
+3. Rule 3 (HOLD): If no clear trend, or spread cannot be covered, HOLD.
 {quota_instruction}
 
 FORMAT STRICTLY:
 ACTION: [BUY / SELL / HOLD]
 AMOUNT_THB: [Enter number e.g., {trade_min}, or ALL]
-REASONING: [Provide a 1-2 sentence logical reason.]""",
-        "error_groq": "ACTION: HOLD\nAMOUNT_THB: 0\nREASONING: Emergency fallback. Groq API limits reached or offline."
+REASONING: [1 short sentence explaining how it aligns with the Rules]"""
     }
 }
 
@@ -115,7 +116,14 @@ def get_trading_period(now):
     return "CLOSED", "Out of Trading Hours", False, None
 
 def load_portfolio():
-    default_state = {"THB_Balance": config.STARTING_THB, "Gold_Gram": 0.0, "Current_Date": str(get_thai_time().date()), "Current_Period": "NONE", "Trades_Count": 0}
+    default_state = {
+        "THB_Balance": config.STARTING_THB, 
+        "Gold_Gram": 0.0, 
+        "Current_Date": str(get_thai_time().date()), 
+        "Current_Period": "NONE", 
+        "Trades_Count": 0,
+        "Last_Buy_Price": 0.0  # 🎯 เพิ่มตรงนี้
+    }
     if os.path.exists(config.PORTFOLIO_FILE):
         with open(config.PORTFOLIO_FILE, "r") as f:
             try:
@@ -226,7 +234,16 @@ def run_ai_analysis_logic():
     predicted_price = lstm_model.predict_next_price_with_lstm(lstm_live_data)
     if predicted_price is None: predicted_price = market['HSH_Buy']
 
-    prompt_content = PROMPTS[LANGUAGE]["trader"].format(hsh_buy=market['HSH_Buy'], hsh_sell=market['HSH_Sell'], xau_price=global_math['xau_price'], rsi=global_math['rsi'], rsi_period=config.RSI_PERIOD, ema_signal=global_math['ema_signal'], current_thb=global_math['current_thb'], lstm_pred=predicted_price, news=news[:600], balance=portfolio['THB_Balance'], gold_gram=portfolio['Gold_Gram'], trade_min=config.TRADE_MIN_THB, quota_instruction=dynamic_quota)
+    prompt_content = PROMPTS[LANGUAGE]["trader"].format(
+        hsh_buy=market['HSH_Buy'], hsh_sell=market['HSH_Sell'], 
+        xau_price=global_math['xau_price'], rsi=global_math['rsi'], 
+        rsi_period=config.RSI_PERIOD, ema_signal=global_math['ema_signal'], 
+        current_thb=global_math['current_thb'], lstm_pred=predicted_price, 
+        news=news[:600], balance=portfolio['THB_Balance'], 
+        gold_gram=portfolio['Gold_Gram'], trade_min=config.TRADE_MIN_THB, 
+        quota_instruction=dynamic_quota,
+        last_buy_price=portfolio.get('Last_Buy_Price', 0.0) # 🎯 เพิ่มตัวแปรนี้
+    )
     
     decision = ask_groq(prompt_content)
     ai_act, ai_reason, ai_amt = "HOLD", "Default Hold", "ALL"
@@ -355,7 +372,10 @@ def execute_trade(req: ExecuteRequest):
             try: target_thb = max(config.TRADE_MIN_THB, min(float(req.ai_amount_thb), portfolio['THB_Balance']))
             except: pass
         gram_bought = round(target_thb / p_buy_gram, 4)
-        portfolio['Gold_Gram'] += gram_bought; portfolio['THB_Balance'] -= target_thb; portfolio['Trades_Count'] += 1
+        portfolio['Gold_Gram'] += gram_bought
+        portfolio['THB_Balance'] -= target_thb
+        portfolio['Trades_Count'] += 1
+        portfolio['Last_Buy_Price'] = market['HSH_Sell'] # 🎯 บันทึกราคาตอนซื้อ
         act, exec_price, exec_amt_str = "BUY", market['HSH_Sell'], f"{gram_bought} g ({target_thb} THB)"
         
     elif final_act == "SELL" and portfolio['Gold_Gram'] > 0:
@@ -366,7 +386,10 @@ def execute_trade(req: ExecuteRequest):
             except: pass
         gram_sold = min(round(target_thb / p_sell_gram, 4), portfolio['Gold_Gram'])
         cash_returned = round(gram_sold * p_sell_gram, 2)
-        portfolio['THB_Balance'] += cash_returned; portfolio['Gold_Gram'] -= gram_sold; portfolio['Trades_Count'] += 1
+        portfolio['THB_Balance'] += cash_returned
+        portfolio['Gold_Gram'] -= gram_sold
+        portfolio['Trades_Count'] += 1
+        portfolio['Last_Buy_Price'] = 0.0 # 🎯 เคลียร์ราคาเมื่อขาย
         act, exec_price, exec_amt_str = "SELL", market['HSH_Buy'], f"Sold {gram_sold} g ({cash_returned} THB)"
 
     save_portfolio(portfolio)
@@ -376,7 +399,6 @@ def execute_trade(req: ExecuteRequest):
     cursor.execute("INSERT INTO logs (action, price, reason, timestamp) VALUES (?, ?, ?, ?)", (act, exec_price if act != "HOLD" else 0, req.ai_reason, now.isoformat()))
     conn.commit()
 
-    # 🎯 เคลียร์สัญญาณหลังจากตัดสินใจเรียบร้อยแล้ว
     pending_signal = None
     return {"status": "success", "executed_action": act, "net_asset_value": nav}
 
