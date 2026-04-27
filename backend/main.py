@@ -380,6 +380,25 @@ def execute_trade(req: ExecuteRequest):
     pending_signal = None
     return {"status": "success", "executed_action": act, "net_asset_value": nav}
 
+# 🎯 API ใหม่สำหรับดึงประวัติการเทรดจากฐานข้อมูล (ซิงค์ทุกอุปกรณ์)
+@api_router.get("/history")
+def get_trade_history():
+    try:
+        # ดึงข้อมูลจากตาราง logs เรียงจากใหม่ไปเก่า
+        cursor.execute("SELECT action, reason, timestamp FROM logs ORDER BY id DESC")
+        rows = cursor.fetchall()
+        
+        history = []
+        for row in rows:
+            history.append({
+                "signal": row[0],
+                "reason": row[1],
+                "time": row[2] # ISO format string
+            })
+        return {"status": "success", "history": history}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 app.include_router(api_router)
 
 @app.get("/hsh-api/{path:path}")

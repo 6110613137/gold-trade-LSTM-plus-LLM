@@ -24,8 +24,6 @@ function getSecondsToNextInterval() {
   return Math.floor((target.getTime() - now.getTime()) / 1000);
 }
 
-const HISTORY_KEY = "gold_history_cache";
-
 export default function App() {
   const [date, setDate] = useState("");
   const [timer, setTimer] = useState("2:00");
@@ -69,17 +67,17 @@ export default function App() {
     } catch (err) { console.error("Error fetching dashboard", err); }
   }
 
-  function saveHistory(signal, reason) {
-    let historyArr = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-    const newTime = new Date().getTime();
-    historyArr.push({ signal, reason, time: newTime });
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(historyArr));
-    setHistory(historyArr.sort((a, b) => b.time - a.time));
-  }
-
-  function loadHistory() {
-    let historyArr = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-    setHistory(historyArr.sort((a, b) => b.time - a.time));
+  // 🎯 แก้ไข: ดึงประวัติจาก Server แทน LocalStorage
+  async function loadHistory() {
+    try {
+      const res = await fetch("/api/history");
+      const data = await res.json();
+      if (data.status === "success") {
+        setHistory(data.history);
+      }
+    } catch (e) {
+      console.error("Error loading history from server:", e);
+    }
   }
 
   // 🎯 Polling: ถาม Backend ทุกๆ 5 วินาทีว่ามี AI วิเคราะห์ทิ้งไว้ไหม
@@ -114,13 +112,13 @@ export default function App() {
           user_action: userAction,
         })
       });
-      saveHistory(
-        userAction === "TIMEOUT" ? aiData.ai_action : userAction,
-        aiData.ai_reason 
-      );
+
       setAiData(null);
       setTimeLeft(0);
+
+      // 🎯 ดึงข้อมูลใหม่ทั้งหมดหลังจากบันทึกสำเร็จ
       await getDashboard();
+      await loadHistory();
     } catch (error) { console.error(error); }
   };
 
@@ -180,7 +178,7 @@ export default function App() {
 
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "flex-start", gap: "15px", marginBottom: "20px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <h1 style={{ color: "#7B542F", margin: 0, lineHeight: "1.5", fontSize: "clamp(24px, 4vw, 36px)"}}>
+          <h1 style={{ color: "#7B542F", margin: 0, lineHeight: "1.5", fontSize: "clamp(24px, 4vw, 36px)" }}>
             เทรดทองพารวย
           </h1>
           <p style={{ margin: 0, color: "#555", fontSize: "16px" }}>
@@ -215,7 +213,7 @@ export default function App() {
 
       <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", flexDirection: "row" }}>
         <div style={{ flex: "2 1 60%", minWidth: "300px" }}>
-          
+
           <div style={{ background: "#F5E7C6", borderRadius: "12px", padding: "15px", marginBottom: "20px" }}>
             <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", gap: "10px" }}>
               <h3 style={{ margin: 0, color: "#7B542F", fontSize: "1.1rem" }}>ราคาทองฮั่วเซ่งเฮง (Real-time)</h3>
@@ -237,8 +235,8 @@ export default function App() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
               <h2 style={{ color: "#7B542F", margin: 0 }}>ประวัติการทำรายการ (Local)</h2>
               {history.length > 5 && (
-                <button 
-                  onClick={() => setShowAllHistory(!showAllHistory)} 
+                <button
+                  onClick={() => setShowAllHistory(!showAllHistory)}
                   style={{ background: "transparent", color: "#155fa0", border: "1px solid #155fa0", padding: "5px 12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}
                 >
                   {showAllHistory ? "ซ่อนรายการ" : `ดูทั้งหมด (${history.length})`}
@@ -354,7 +352,7 @@ export default function App() {
               </div>
             </div>
           )}
-          
+
           {!aiData && dashboard && dashboard.period && dashboard.period.is_active && (
             <div style={{ padding: "15px", background: "transparent", color: "#888", border: "2px dashed #ccc", borderRadius: "8px", textAlign: "center", fontSize: "14px" }}>
               ระบบกำลังรอสัญญาณจาก AI...
