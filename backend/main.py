@@ -256,25 +256,34 @@ async def poll_chart_data():
         except: pass
         await asyncio.sleep(60)
 
-# 🎯 Background Task 2: ให้ AI วิเคราะห์อัตโนมัติ (Autonomous AI)
+last_run_minute = -1 
+
 async def auto_analysis_loop():
-    global pending_signal
+    global pending_signal, last_run_minute
     while True:
         try:
             now = get_thai_time()
-            # ทำงานทุกๆ รอบนาทีที่หารลงตัว (เช่น 2 นาที) และอยู่ในช่วง 10 วินาทีแรกของนาทีนั้น
-            if now.minute % config.RUN_EVERY_MINUTES == 0 and now.second < 10:
+            
+            # 🎯 เช็คว่าหาร 2 ลงตัว และยังไม่เคยรันในนาทีนี้ (แก้ปัญหา Server Free ช้าแล้วพลาดหน้าต่าง 10 วินาที)
+            if now.minute % config.RUN_EVERY_MINUTES == 0 and now.minute != last_run_minute:
+                last_run_minute = now.minute # บันทึกว่ารันของนาทีนี้ไปแล้ว
+                
                 if pending_signal is None:
                     print(f"[{now.strftime('%H:%M:%S')}] 🤖 Backend: Running Autonomous AI Analysis...")
                     result = run_ai_analysis_logic()
-                    if result and result.get("ai_action") in ["BUY", "SELL"]:
+                    
+                    if result:
+                        # 🎯 แก้ไข: ส่งสัญญาณเข้าหน้าเว็บเสมอ ไม่ว่าจะ BUY, SELL หรือ HOLD
                         pending_signal = result
-                        print(f"🔥 Signal Detected: {result['ai_action']}")
-                        send_line_alert(result["ai_action"], result["ai_reason"], result["current_market_price"])
-                await asyncio.sleep(60) # พักเบรกเพื่อไม่ให้รันซ้ำในนาทีเดียวกัน
+                        print(f"🔥 Signal Executed: {result['ai_action']}")
+                        
+                        # แต่ LINE จะเด้งเตือนเฉพาะเวลาที่ต้องแอคชัน (BUY/SELL) เท่านั้น
+                        if result.get("ai_action") in ["BUY", "SELL"]:
+                            send_line_alert(result["ai_action"], result["ai_reason"], result["current_market_price"])
+                            
         except Exception as e:
             print(f"Auto Analysis Error: {e}")
-        await asyncio.sleep(5) # เช็คเงื่อนไขเวลาทุก 5 วินาที
+        await asyncio.sleep(5)
 
 @app.on_event("startup")
 async def startup_event():
